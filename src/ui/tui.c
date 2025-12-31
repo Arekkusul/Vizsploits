@@ -44,41 +44,44 @@ static void create_windows(tui_t *tui) {
     int w = tui->term_width;
 
     // Layout:
-    // +-------------------+------------------+
-    // |                   |                  |
-    // |    Heap View      |   Info/Details   |
-    // |    (left half)    |   (right half)   |
-    // |                   |                  |
-    // +-------------------+------------------+
-    // |                                      |
-    // |           Timeline (bottom)          |
-    // |                                      |
-    // +--------------------------------------+
-    // | Status bar                           |
-    // +--------------------------------------+
+    // +--------------+--------------+---------------+
+    // |              |              |               |
+    // |   Heap View  |  Stack View  |  Info/Details |
+    // |   (1/3 w)    |   (1/3 w)    |    (1/3 w)    |
+    // |              |              |               |
+    // +--------------+--------------+---------------+
+    // |                                             |
+    // |              Timeline (bottom)              |
+    // |                                             |
+    // +---------------------------------------------+
+    // | Status bar                                  |
+    // +---------------------------------------------+
 
-    int heap_w = w / 2;
-    int info_w = w - heap_w;
+    int col_w = w / 3;
     int main_h = h * 2 / 3;
     int timeline_h = h - main_h - 1;
 
-    tui->heap_win = newwin(main_h, heap_w, 0, 0);
-    tui->info_win = newwin(main_h, info_w, 0, heap_w);
+    tui->heap_win = newwin(main_h, col_w, 0, 0);
+    tui->stack_win = newwin(main_h, col_w, 0, col_w);
+    tui->info_win = newwin(main_h, w - 2 * col_w, 0, 2 * col_w);
     tui->timeline_win = newwin(timeline_h, w, main_h, 0);
     tui->status_win = newwin(1, w, h - 1, 0);
 
     // Enable keypad for all windows
     keypad(tui->heap_win, TRUE);
+    keypad(tui->stack_win, TRUE);
     keypad(tui->info_win, TRUE);
     keypad(tui->timeline_win, TRUE);
 }
 
 static void destroy_windows(tui_t *tui) {
     if (tui->heap_win) delwin(tui->heap_win);
+    if (tui->stack_win) delwin(tui->stack_win);
     if (tui->info_win) delwin(tui->info_win);
     if (tui->timeline_win) delwin(tui->timeline_win);
     if (tui->status_win) delwin(tui->status_win);
     tui->heap_win = NULL;
+    tui->stack_win = NULL;
     tui->info_win = NULL;
     tui->timeline_win = NULL;
     tui->status_win = NULL;
@@ -103,6 +106,7 @@ tui_t *tui_init(void) {
 
     // Create views
     tui->heap_view = heap_view_create();
+    tui->stack_view = stack_view_create();
     tui->timeline = timeline_create();
 
     tui->mode = UI_MODE_MENU;
@@ -124,6 +128,7 @@ void tui_cleanup(tui_t *tui) {
     destroy_windows(tui);
 
     if (tui->heap_view) heap_view_destroy(tui->heap_view);
+    if (tui->stack_view) stack_view_destroy(tui->stack_view);
     if (tui->timeline) timeline_destroy(tui->timeline);
 
     endwin();
@@ -227,9 +232,16 @@ static void render_menu(tui_t *tui) {
     // Show placeholder in heap window
     werase(tui->heap_win);
     box(tui->heap_win, 0, 0);
-    mvwprintw(tui->heap_win, 0, 2, " Heap View ");
-    mvwprintw(tui->heap_win, 2, 2, "(select an exploit)");
+    mvwprintw(tui->heap_win, 0, 2, " Heap ");
+    mvwprintw(tui->heap_win, 2, 2, "(select exploit)");
     wrefresh(tui->heap_win);
+
+    // Stack placeholder
+    werase(tui->stack_win);
+    box(tui->stack_win, 0, 0);
+    mvwprintw(tui->stack_win, 0, 2, " Stack ");
+    mvwprintw(tui->stack_win, 2, 2, "(select exploit)");
+    wrefresh(tui->stack_win);
 
     // Timeline placeholder
     werase(tui->timeline_win);
@@ -356,6 +368,7 @@ void tui_refresh(tui_t *tui) {
         case UI_MODE_RUNNING:
         case UI_MODE_FINISHED:
             heap_view_render(tui->heap_view, tui->heap_win);
+            stack_view_render(tui->stack_view, tui->stack_win);
             timeline_render(tui->timeline, tui->timeline_win);
             render_info(tui);
             break;
@@ -376,8 +389,9 @@ void tui_on_event(const primitive_event_t *evt, void *userdata) {
     // Add to timeline
     timeline_add_event(tui->timeline, evt);
 
-    // Update heap view
+    // Update views
     heap_view_on_event(tui->heap_view, evt);
+    stack_view_on_event(tui->stack_view, evt);
 }
 
 static void run_exploit_step(tui_t *tui) {
@@ -386,6 +400,7 @@ static void run_exploit_step(tui_t *tui) {
         const timeline_entry_t *entry = timeline_current(tui->timeline);
         if (entry) {
             heap_view_on_event(tui->heap_view, &entry->event);
+            stack_view_on_event(tui->stack_view, &entry->event);
         }
         timeline_step_forward(tui->timeline);
         tui_refresh(tui);
@@ -403,6 +418,7 @@ static void start_exploit(tui_t *tui) {
 
     // Clear views
     heap_view_clear(tui->heap_view);
+    stack_view_clear(tui->stack_view);
     timeline_clear(tui->timeline);
 
     // Subscribe to events

@@ -2,6 +2,7 @@
 #define TUI_H
 
 #include "../visualization/heap_view.h"
+#include "../visualization/stack_view.h"
 #include "../visualization/timeline.h"
 #include "../exploits/api/exploit_api.h"
 #include <ncurses.h>
@@ -23,12 +24,14 @@ typedef struct {
     // Windows
     WINDOW *main_win;
     WINDOW *heap_win;
+    WINDOW *stack_win;
     WINDOW *timeline_win;
     WINDOW *info_win;
     WINDOW *status_win;
 
     // Views
     heap_view_t *heap_view;
+    stack_view_t *stack_view;
     timeline_t *timeline;
 
     // State

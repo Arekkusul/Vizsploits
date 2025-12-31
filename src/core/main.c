@@ -51,6 +51,56 @@ static void list_exploits_cli(void) {
     }
 }
 
+// Event handler for headless mode
+static void headless_event_handler(const primitive_event_t *evt, void *userdata) {
+    (void)userdata;
+
+    // Color codes for terminal
+    const char *color_reset = "\033[0m";
+    const char *color_green = "\033[32m";
+    const char *color_yellow = "\033[33m";
+    const char *color_red = "\033[31m";
+    const char *color_cyan = "\033[36m";
+
+    const char *color = color_reset;
+
+    // Choose color based on event type
+    switch (evt->type) {
+        case PRIM_ALLOC:
+            color = color_green;
+            break;
+        case PRIM_FREE:
+            color = color_yellow;
+            break;
+        case PRIM_UAF:
+        case PRIM_DOUBLE_FREE:
+        case PRIM_OVERFLOW:
+            color = color_red;
+            break;
+        case PRIM_CHECKPOINT:
+            color = color_cyan;
+            break;
+        default:
+            break;
+    }
+
+    printf("%s[%3d] %-12s%s", color, evt->step_number,
+           primitive_type_short(evt->type), color_reset);
+
+    if (evt->address) {
+        printf(" addr=0x%lx", (unsigned long)evt->address);
+    }
+    if (evt->size > 0) {
+        printf(" size=%zu", evt->size);
+    }
+
+    if (evt->description) {
+        printf(" | %s", evt->description);
+    }
+
+    printf("\n");
+}
+
 static void run_exploit_headless(int exploit_num) {
     exploit_t *exp = exploit_get_by_index(exploit_num - 1);
     if (!exp) {
@@ -62,29 +112,24 @@ static void run_exploit_headless(int exploit_num) {
     printf("═══════════════════════════════════════════\n\n");
 
     // Subscribe to print events
-    event_bus_subscribe(PRIM_NONE, NULL, NULL);  // Just process them
+    event_bus_subscribe(PRIM_NONE, headless_event_handler, NULL);
 
     if (exp->setup) {
-        printf("[*] Setup...\n");
         exp->setup(exp);
     }
 
     if (exp->run) {
-        printf("[*] Running...\n");
         exp->run(exp);
     }
 
-    // Process events and print them
-    printf("\n[*] Events:\n");
-    // In headless mode, events were emitted but we'd need a handler to print them
-    // For now, the exploit itself prints progress
+    // Process all events
+    event_bus_process();
 
     if (exp->cleanup) {
-        printf("\n[*] Cleanup...\n");
         exp->cleanup(exp);
     }
 
-    printf("\n[*] Done.\n");
+    printf("\n[*] Exploit complete.\n");
 }
 
 int main(int argc, char *argv[]) {
