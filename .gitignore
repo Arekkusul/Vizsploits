@@ -1,0 +1,19 @@
+# Build artifacts
+obj/
+bin/
+lib/
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Debug
+*.dSYM/
+core
+
+# OS files
+.DS_Store
+Thumbs.db
