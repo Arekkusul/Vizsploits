@@ -18,6 +18,17 @@ typedef enum {
 } ui_mode_t;
 
 /**
+ * Panel focus
+ */
+typedef enum {
+    PANEL_HEAP,
+    PANEL_STACK,
+    PANEL_INFO,
+    PANEL_TIMELINE,
+    PANEL_COUNT
+} panel_focus_t;
+
+/**
  * TUI State
  */
 typedef struct {
@@ -41,6 +52,9 @@ typedef struct {
     bool running;
     bool step_mode;
     bool quit_requested;
+
+    // Panel focus
+    panel_focus_t focused_panel;
 
     // Dimensions
     int term_height;
@@ -81,5 +95,11 @@ void tui_show_menu(tui_t *tui);
  * Handle event from exploit
  */
 void tui_on_event(const primitive_event_t *evt, void *userdata);
+
+/**
+ * Switch panel focus
+ */
+void tui_focus_next(tui_t *tui);
+void tui_focus_prev(tui_t *tui);
 
 #endif // TUI_H

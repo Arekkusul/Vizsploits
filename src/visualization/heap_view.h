@@ -2,6 +2,7 @@
 #define HEAP_VIEW_H
 
 #include "../core/primitives.h"
+#include "hex_view.h"
 #include <ncurses.h>
 
 /**
@@ -16,7 +17,7 @@ typedef enum {
 } chunk_state_t;
 
 /**
- * Heap Chunk
+ * Heap Chunk with memory contents
  */
 typedef struct {
     void *address;
@@ -26,6 +27,11 @@ typedef struct {
     uint64_t alloc_time;
     uint64_t free_time;
     bool highlight;
+
+    // Memory contents
+    uint8_t *data;           // Actual data (malloc'd)
+    size_t data_capacity;    // Allocated size for data
+    int hex_region_idx;      // Index in hex_view
 } heap_chunk_t;
 
 /**
@@ -37,6 +43,12 @@ typedef struct {
     size_t capacity;
     int scroll_offset;
     int selected_chunk;
+
+    // Hex view for detailed memory display
+    hex_view_t *hex_view;
+
+    // Display mode
+    bool show_hex_detail;    // Show hex dump instead of simple view
 } heap_view_t;
 
 /**
@@ -57,7 +69,7 @@ void heap_view_on_event(heap_view_t *view, const primitive_event_t *evt);
 /**
  * Render heap view to window
  */
-void heap_view_render(heap_view_t *view, WINDOW *win);
+void heap_view_render(heap_view_t *view, WINDOW *win, bool focused);
 
 /**
  * Clear all chunks
@@ -68,5 +80,16 @@ void heap_view_clear(heap_view_t *view);
  * Scroll heap view
  */
 void heap_view_scroll(heap_view_t *view, int delta);
+
+/**
+ * Toggle hex detail view
+ */
+void heap_view_toggle_hex(heap_view_t *view);
+
+/**
+ * Select next/prev chunk
+ */
+void heap_view_select_next(heap_view_t *view);
+void heap_view_select_prev(heap_view_t *view);
 
 #endif // HEAP_VIEW_H
