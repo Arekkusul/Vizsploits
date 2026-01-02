@@ -5,7 +5,6 @@
 #include <unistd.h>
 #include <signal.h>
 
-// Global for signal handler
 static tui_t *g_tui = NULL;
 
 // Color pairs
@@ -15,6 +14,7 @@ static tui_t *g_tui = NULL;
 #define COLOR_BLUE_PAIR    4
 #define COLOR_MAGENTA_PAIR 5
 #define COLOR_CYAN_PAIR    6
+#define COLOR_WHITE_PAIR   7
 
 static void handle_resize(int sig) {
     (void)sig;
@@ -36,6 +36,7 @@ static void init_colors(void) {
         init_pair(COLOR_BLUE_PAIR, COLOR_BLUE, -1);
         init_pair(COLOR_MAGENTA_PAIR, COLOR_MAGENTA, -1);
         init_pair(COLOR_CYAN_PAIR, COLOR_CYAN, -1);
+        init_pair(COLOR_WHITE_PAIR, COLOR_WHITE, -1);
     }
 }
 
@@ -43,31 +44,31 @@ static void create_windows(tui_t *tui) {
     int h = tui->term_height;
     int w = tui->term_width;
 
-    // Layout:
-    // +--------------+--------------+---------------+
-    // |              |              |               |
-    // |   Heap View  |  Stack View  |  Info/Details |
-    // |   (1/3 w)    |   (1/3 w)    |    (1/3 w)    |
-    // |              |              |               |
-    // +--------------+--------------+---------------+
-    // |                                             |
-    // |              Timeline (bottom)              |
-    // |                                             |
-    // +---------------------------------------------+
-    // | Status bar                                  |
-    // +---------------------------------------------+
+    // Layout (improved):
+    // +------------+------------+------------------+
+    // |   Heap     |   Stack    |   Event Details  |
+    // |   (30%)    |   (30%)    |      (40%)       |
+    // +------------+------------+------------------+
+    // |              Timeline (20%)                |
+    // +--------------------------------------------+
+    // | Status bar (1 line)                        |
+    // +--------------------------------------------+
 
-    int col_w = w / 3;
-    int main_h = h * 2 / 3;
-    int timeline_h = h - main_h - 1;
+    int heap_w = w * 30 / 100;
+    int stack_w = w * 30 / 100;
+    int info_w = w - heap_w - stack_w;
 
-    tui->heap_win = newwin(main_h, col_w, 0, 0);
-    tui->stack_win = newwin(main_h, col_w, 0, col_w);
-    tui->info_win = newwin(main_h, w - 2 * col_w, 0, 2 * col_w);
+    int main_h = h * 65 / 100;
+    int timeline_h = h - main_h - 2;
+    if (timeline_h < 6) timeline_h = 6;
+    main_h = h - timeline_h - 2;
+
+    tui->heap_win = newwin(main_h, heap_w, 0, 0);
+    tui->stack_win = newwin(main_h, stack_w, 0, heap_w);
+    tui->info_win = newwin(main_h, info_w, 0, heap_w + stack_w);
     tui->timeline_win = newwin(timeline_h, w, main_h, 0);
-    tui->status_win = newwin(1, w, h - 1, 0);
+    tui->status_win = newwin(2, w, h - 2, 0);
 
-    // Enable keypad for all windows
     keypad(tui->heap_win, TRUE);
     keypad(tui->stack_win, TRUE);
     keypad(tui->info_win, TRUE);
@@ -91,20 +92,18 @@ tui_t *tui_init(void) {
     tui_t *tui = calloc(1, sizeof(tui_t));
     if (!tui) return NULL;
 
-    // Initialize ncurses
     initscr();
     cbreak();
     noecho();
     curs_set(0);
     keypad(stdscr, TRUE);
-    timeout(100);  // 100ms timeout for getch()
+    timeout(100);
 
     init_colors();
 
     getmaxyx(stdscr, tui->term_height, tui->term_width);
     create_windows(tui);
 
-    // Create views
     tui->heap_view = heap_view_create();
     tui->stack_view = stack_view_create();
     tui->timeline = timeline_create();
@@ -113,7 +112,6 @@ tui_t *tui_init(void) {
     tui->step_mode = true;
     tui->focused_panel = PANEL_HEAP;
 
-    // Setup signal handler for resize
     g_tui = tui;
     signal(SIGWINCH, handle_resize);
 
@@ -164,7 +162,13 @@ static const char *panel_name(panel_focus_t panel) {
 }
 
 static void render_status_bar(tui_t *tui) {
+    int height, width;
+    getmaxyx(tui->status_win, height, width);
+    (void)height;
+
     werase(tui->status_win);
+
+    // Line 1: Controls
     wattron(tui->status_win, A_REVERSE);
 
     const char *mode_str = "";
@@ -175,34 +179,49 @@ static void render_status_bar(tui_t *tui) {
         case UI_MODE_HELP:     mode_str = "HELP"; break;
     }
 
-    mvwprintw(tui->status_win, 0, 0, " Kernel Exploit Visualizer ");
-    wprintw(tui->status_win, "| Mode: %s ", mode_str);
+    mvwprintw(tui->status_win, 0, 0, " [Space]=Step [R]=Run [B]=Back [Q]=Quit ");
+    wprintw(tui->status_win, "| %s ", mode_str);
 
     if (tui->mode == UI_MODE_RUNNING || tui->mode == UI_MODE_FINISHED) {
         wprintw(tui->status_win, "| Focus: %s ", panel_name(tui->focused_panel));
     }
 
     if (tui->current_exploit) {
-        wprintw(tui->status_win, "| Exploit: %s ", tui->current_exploit->meta.name);
+        wprintw(tui->status_win, "| %s ", tui->current_exploit->meta.name);
     }
 
-    // Controls hint
+    // Fill line
     int y, x;
     getyx(tui->status_win, y, x);
     (void)y;
-
-    int hint_start = tui->term_width - 35;
-    if (x < hint_start) {
-        mvwprintw(tui->status_win, 0, hint_start, " [</>] panel [j/k] scroll [q] quit ");
-    }
-
-    // Fill rest of line
-    getyx(tui->status_win, y, x);
-    for (int i = x; i < tui->term_width; i++) {
-        waddch(tui->status_win, ' ');
-    }
-
+    for (int i = x; i < width; i++) waddch(tui->status_win, ' ');
     wattroff(tui->status_win, A_REVERSE);
+
+    // Line 2: Color legend
+    mvwprintw(tui->status_win, 1, 0, " Legend: ");
+
+    wattron(tui->status_win, COLOR_PAIR(COLOR_GREEN_PAIR) | A_BOLD);
+    wprintw(tui->status_win, "NEW ");
+    wattroff(tui->status_win, COLOR_PAIR(COLOR_GREEN_PAIR) | A_BOLD);
+
+    wattron(tui->status_win, COLOR_PAIR(COLOR_YELLOW_PAIR));
+    wprintw(tui->status_win, "MOD ");
+    wattroff(tui->status_win, COLOR_PAIR(COLOR_YELLOW_PAIR));
+
+    wattron(tui->status_win, COLOR_PAIR(COLOR_RED_PAIR));
+    wprintw(tui->status_win, "CORRUPT ");
+    wattroff(tui->status_win, COLOR_PAIR(COLOR_RED_PAIR));
+
+    wattron(tui->status_win, COLOR_PAIR(COLOR_BLUE_PAIR));
+    wprintw(tui->status_win, "FREED ");
+    wattroff(tui->status_win, COLOR_PAIR(COLOR_BLUE_PAIR));
+
+    wattron(tui->status_win, COLOR_PAIR(COLOR_CYAN_PAIR));
+    wprintw(tui->status_win, "PTR ");
+    wattroff(tui->status_win, COLOR_PAIR(COLOR_CYAN_PAIR));
+
+    wprintw(tui->status_win, "| [</>] panel [j/k] scroll [0] reset");
+
     wrefresh(tui->status_win);
 }
 
@@ -215,40 +234,38 @@ static void render_menu(tui_t *tui) {
     getmaxyx(win, height, width);
     (void)width;
 
-    // Title
-    wattron(win, A_BOLD);
+    wattron(win, A_BOLD | COLOR_PAIR(COLOR_CYAN_PAIR));
     mvwprintw(win, 1, 2, "KERNEL EXPLOIT VISUALIZER");
-    wattroff(win, A_BOLD);
-    mvwprintw(win, 2, 2, "==========================");
+    wattroff(win, A_BOLD | COLOR_PAIR(COLOR_CYAN_PAIR));
 
-    mvwprintw(win, 4, 2, "Select an exploit to visualize:");
+    mvwprintw(win, 3, 2, "Select an exploit:");
 
-    int y = 6;
+    int y = 5;
     int count = exploit_count();
 
     if (count == 0) {
+        wattron(win, A_DIM);
         mvwprintw(win, y, 4, "(no exploits registered)");
+        wattroff(win, A_DIM);
     } else {
         for (int i = 0; i < count && y < height - 4; i++) {
             exploit_t *exp = exploit_get_by_index(i);
             if (!exp) continue;
 
             if (i == tui->selected_exploit) {
-                wattron(win, A_REVERSE);
+                wattron(win, A_REVERSE | COLOR_PAIR(COLOR_CYAN_PAIR));
             }
 
-            mvwprintw(win, y, 4, "%d. %s", i + 1, exp->meta.name);
+            mvwprintw(win, y, 3, " %d. %s ", i + 1, exp->meta.name);
 
             if (i == tui->selected_exploit) {
-                wattroff(win, A_REVERSE);
+                wattroff(win, A_REVERSE | COLOR_PAIR(COLOR_CYAN_PAIR));
             }
-
             y++;
 
-            // Description
             if (exp->meta.description) {
                 wattron(win, A_DIM);
-                mvwprintw(win, y, 7, "%.50s", exp->meta.description);
+                mvwprintw(win, y, 6, "%.45s", exp->meta.description);
                 wattroff(win, A_DIM);
                 y++;
             }
@@ -256,31 +273,35 @@ static void render_menu(tui_t *tui) {
         }
     }
 
-    // Controls
-    mvwprintw(win, height - 3, 2, "Controls:");
-    mvwprintw(win, height - 2, 4, "[Up/Down] Select  [Enter] Run  [Q] Quit");
+    wattron(win, A_DIM);
+    mvwprintw(win, height - 2, 2, "[Up/Down] Select  [Enter] Run  [Q] Quit");
+    wattroff(win, A_DIM);
 
     wrefresh(win);
 
-    // Show placeholder in heap window
+    // Placeholders
     werase(tui->heap_win);
     box(tui->heap_win, 0, 0);
     mvwprintw(tui->heap_win, 0, 2, " Heap ");
+    wattron(tui->heap_win, A_DIM);
     mvwprintw(tui->heap_win, 2, 2, "(select exploit)");
+    wattroff(tui->heap_win, A_DIM);
     wrefresh(tui->heap_win);
 
-    // Stack placeholder
     werase(tui->stack_win);
     box(tui->stack_win, 0, 0);
     mvwprintw(tui->stack_win, 0, 2, " Stack ");
+    wattron(tui->stack_win, A_DIM);
     mvwprintw(tui->stack_win, 2, 2, "(select exploit)");
+    wattroff(tui->stack_win, A_DIM);
     wrefresh(tui->stack_win);
 
-    // Timeline placeholder
     werase(tui->timeline_win);
     box(tui->timeline_win, 0, 0);
     mvwprintw(tui->timeline_win, 0, 2, " Timeline ");
-    mvwprintw(tui->timeline_win, 2, 2, "(select an exploit to see timeline)");
+    wattron(tui->timeline_win, A_DIM);
+    mvwprintw(tui->timeline_win, 2, 2, "(select exploit to see timeline)");
+    wattroff(tui->timeline_win, A_DIM);
     wrefresh(tui->timeline_win);
 }
 
@@ -291,121 +312,136 @@ static void render_info(tui_t *tui) {
 
     int height, width;
     getmaxyx(win, height, width);
-    (void)width;
 
     bool focused = (tui->focused_panel == PANEL_INFO);
-    if (focused) {
-        wattron(win, A_REVERSE);
-    }
+    if (focused) wattron(win, A_REVERSE);
     mvwprintw(win, 0, 2, " Event Details ");
-    if (focused) {
-        wattroff(win, A_REVERSE);
-    }
+    if (focused) wattroff(win, A_REVERSE);
+
+    // Step counter in title bar
+    wattron(win, A_DIM);
+    mvwprintw(win, 0, width - 15, " Step %d/%zu ",
+              tui->timeline->current_step, tui->timeline->num_entries);
+    wattroff(win, A_DIM);
 
     const timeline_entry_t *entry = timeline_current(tui->timeline);
     if (!entry) {
-        mvwprintw(win, 2, 2, "(no current event)");
+        wattron(win, A_DIM);
+        mvwprintw(win, height/2, (width-18)/2, "(no current event)");
+        wattroff(win, A_DIM);
         wrefresh(win);
         return;
     }
 
     const primitive_event_t *evt = &entry->event;
-
     int y = 2;
 
-    // Event type
-    wattron(win, A_BOLD);
-    mvwprintw(win, y++, 2, "Type: %s", primitive_type_to_string(evt->type));
-    wattroff(win, A_BOLD);
-    y++;
-
-    // Step number
-    mvwprintw(win, y++, 2, "Step: %d", evt->step_number);
-
-    // Address
-    if (evt->address) {
-        mvwprintw(win, y++, 2, "Address: 0x%lx", (unsigned long)evt->address);
+    // Event type with color
+    int type_color = COLOR_WHITE_PAIR;
+    switch (evt->type) {
+        case PRIM_ALLOC:    type_color = COLOR_GREEN_PAIR; break;
+        case PRIM_FREE:     type_color = COLOR_BLUE_PAIR; break;
+        case PRIM_WRITE:    type_color = COLOR_YELLOW_PAIR; break;
+        case PRIM_UAF:      type_color = COLOR_RED_PAIR; break;
+        case PRIM_OVERFLOW: type_color = COLOR_RED_PAIR; break;
+        default: break;
     }
 
-    // Size
-    if (evt->size > 0) {
-        mvwprintw(win, y++, 2, "Size: %zu bytes", evt->size);
-    }
-
+    wattron(win, A_BOLD | COLOR_PAIR(type_color));
+    mvwprintw(win, y++, 2, "%s", primitive_type_to_string(evt->type));
+    wattroff(win, A_BOLD | COLOR_PAIR(type_color));
     y++;
 
-    // Description
+    // Description (prominent)
     if (evt->description) {
         wattron(win, COLOR_PAIR(COLOR_CYAN_PAIR));
-        mvwprintw(win, y++, 2, "Description:");
+        mvwprintw(win, y++, 2, "What:");
         wattroff(win, COLOR_PAIR(COLOR_CYAN_PAIR));
 
-        // Word wrap description
+        // Word wrap
         const char *desc = evt->description;
-        int max_width = width - 6;
-        int desc_y = y;
-
-        while (*desc && desc_y < height - 4) {
+        int max_w = width - 6;
+        while (*desc && y < height - 8) {
             int len = strlen(desc);
-            if (len > max_width) len = max_width;
-
-            mvwprintw(win, desc_y++, 4, "%.*s", len, desc);
+            if (len > max_w) len = max_w;
+            mvwprintw(win, y++, 4, "%.*s", len, desc);
             desc += len;
         }
-        y = desc_y + 1;
+        y++;
     }
 
-    // Type-specific info
-    y++;
+    // Type-specific details
+    wattron(win, A_DIM);
+    mvwprintw(win, y++, 2, "Details:");
+    wattroff(win, A_DIM);
+
     switch (evt->type) {
         case PRIM_ALLOC:
-            mvwprintw(win, y++, 2, "Pointer: 0x%lx",
-                      (unsigned long)evt->data.alloc.ptr);
-            mvwprintw(win, y++, 2, "Requested: %zu bytes",
+            mvwprintw(win, y++, 4, "ptr:  0x%04lx",
+                      (unsigned long)evt->data.alloc.ptr & 0xFFFF);
+            mvwprintw(win, y++, 4, "size: %zu bytes",
                       evt->data.alloc.requested_size);
             break;
 
         case PRIM_FREE:
-            mvwprintw(win, y++, 2, "Pointer: 0x%lx",
-                      (unsigned long)evt->data.free.ptr);
+            mvwprintw(win, y++, 4, "ptr:  0x%04lx",
+                      (unsigned long)evt->data.free.ptr & 0xFFFF);
             if (evt->data.free.was_freed) {
                 wattron(win, COLOR_PAIR(COLOR_RED_PAIR) | A_BOLD);
-                mvwprintw(win, y++, 2, "WARNING: Already freed!");
+                mvwprintw(win, y++, 4, "DOUBLE FREE!");
                 wattroff(win, COLOR_PAIR(COLOR_RED_PAIR) | A_BOLD);
             }
             break;
 
         case PRIM_UAF:
             wattron(win, COLOR_PAIR(COLOR_RED_PAIR) | A_BOLD);
-            mvwprintw(win, y++, 2, "USE-AFTER-FREE DETECTED!");
+            mvwprintw(win, y++, 4, "USE-AFTER-FREE!");
             wattroff(win, COLOR_PAIR(COLOR_RED_PAIR) | A_BOLD);
-            mvwprintw(win, y++, 2, "Freed ptr: 0x%lx",
-                      (unsigned long)evt->data.uaf.freed_ptr);
+            mvwprintw(win, y++, 4, "ptr: 0x%04lx",
+                      (unsigned long)evt->data.uaf.freed_ptr & 0xFFFF);
             break;
 
         case PRIM_WRITE:
-            mvwprintw(win, y++, 2, "Dest: 0x%lx",
-                      (unsigned long)evt->data.memop.dst);
-            mvwprintw(win, y++, 2, "Length: %zu", evt->data.memop.len);
-            // Show preview bytes
+            mvwprintw(win, y++, 4, "dst:  0x%04lx",
+                      (unsigned long)evt->data.memop.dst & 0xFFFF);
+            mvwprintw(win, y++, 4, "len:  %zu", evt->data.memop.len);
+
             if (evt->data.memop.len > 0) {
-                mvwprintw(win, y++, 2, "Data preview:");
+                mvwprintw(win, y++, 4, "data:");
                 wattron(win, COLOR_PAIR(COLOR_YELLOW_PAIR));
-                wmove(win, y, 4);
-                for (size_t i = 0; i < 16 && i < evt->data.memop.len; i++) {
+                wmove(win, y, 6);
+                for (size_t i = 0; i < 8 && i < evt->data.memop.len; i++) {
                     wprintw(win, "%02x ", evt->data.memop.preview[i]);
                 }
                 wattroff(win, COLOR_PAIR(COLOR_YELLOW_PAIR));
                 y++;
+
+                // ASCII preview
+                wattron(win, A_DIM);
+                wmove(win, y, 6);
+                wprintw(win, "\"");
+                for (size_t i = 0; i < 12 && i < evt->data.memop.len; i++) {
+                    char c = (char)evt->data.memop.preview[i];
+                    if (c >= 32 && c < 127) wprintw(win, "%c", c);
+                    else wprintw(win, ".");
+                }
+                wprintw(win, "\"");
+                wattroff(win, A_DIM);
+                y++;
             }
+            break;
+
+        case PRIM_OVERFLOW:
+            wattron(win, COLOR_PAIR(COLOR_RED_PAIR) | A_BOLD);
+            mvwprintw(win, y++, 4, "BUFFER OVERFLOW!");
+            wattroff(win, COLOR_PAIR(COLOR_RED_PAIR) | A_BOLD);
+            mvwprintw(win, y++, 4, "overflow: %zu bytes",
+                      evt->data.overflow.overflow_bytes);
             break;
 
         default:
             break;
     }
-
-    // Controls at bottom
-    mvwprintw(win, height - 2, 2, "[Space] Step [R] Run [Q] Back");
 
     wrefresh(win);
 }
@@ -427,7 +463,6 @@ void tui_refresh(tui_t *tui) {
             break;
 
         case UI_MODE_HELP:
-            // TODO: help screen
             break;
     }
 
@@ -439,17 +474,13 @@ void tui_on_event(const primitive_event_t *evt, void *userdata) {
     tui_t *tui = userdata;
     if (!tui || !evt) return;
 
-    // Add to timeline
     timeline_add_event(tui->timeline, evt);
-
-    // Update views
     heap_view_on_event(tui->heap_view, evt);
     stack_view_on_event(tui->stack_view, evt);
 }
 
 static void run_exploit_step(tui_t *tui) {
     if (tui->timeline->current_step < tui->timeline->num_entries) {
-        // Get current event and update views
         const timeline_entry_t *entry = timeline_current(tui->timeline);
         if (entry) {
             heap_view_on_event(tui->heap_view, &entry->event);
@@ -469,23 +500,17 @@ static void start_exploit(tui_t *tui) {
     tui->current_exploit = exp;
     tui->mode = UI_MODE_RUNNING;
 
-    // Clear views
     heap_view_clear(tui->heap_view);
     stack_view_clear(tui->stack_view);
     timeline_clear(tui->timeline);
 
-    // Subscribe to events
     event_bus_subscribe(PRIM_NONE, tui_on_event, tui);
 
-    // Run the exploit (it emits events to the bus)
     if (exp->setup) exp->setup(exp);
     if (exp->run) exp->run(exp);
     if (exp->cleanup) exp->cleanup(exp);
 
-    // Process all events
     event_bus_process();
-
-    // Reset timeline to beginning for step-through
     timeline_goto_step(tui->timeline, 0);
 
     tui_refresh(tui);
@@ -538,27 +563,23 @@ int tui_run(tui_t *tui) {
                 switch (ch) {
                     case 'q':
                     case 'Q':
-                        // Back to menu
                         tui->mode = UI_MODE_MENU;
                         tui->current_exploit = NULL;
                         tui_refresh(tui);
                         break;
 
                     case ' ':
-                        // Step forward
                         run_exploit_step(tui);
                         break;
 
                     case 'b':
                     case 'B':
-                        // Step backward
                         timeline_step_backward(tui->timeline);
                         tui_refresh(tui);
                         break;
 
                     case 'r':
                     case 'R':
-                        // Run to end (or next checkpoint)
                         while (tui->timeline->current_step < tui->timeline->num_entries) {
                             run_exploit_step(tui);
                             if (timeline_at_checkpoint(tui->timeline)) {
@@ -568,14 +589,12 @@ int tui_run(tui_t *tui) {
                         break;
 
                     case '0':
-                        // Reset to beginning
                         timeline_goto_step(tui->timeline, 0);
                         heap_view_clear(tui->heap_view);
                         stack_view_clear(tui->stack_view);
                         tui_refresh(tui);
                         break;
 
-                    // Panel navigation
                     case KEY_LEFT:
                     case 'h':
                     case '<':
@@ -590,7 +609,6 @@ int tui_run(tui_t *tui) {
                         tui_refresh(tui);
                         break;
 
-                    // Scroll focused panel
                     case KEY_UP:
                     case 'k':
                         switch (tui->focused_panel) {
@@ -624,7 +642,7 @@ int tui_run(tui_t *tui) {
                 break;
 
             case UI_MODE_HELP:
-                if (ch == 'q' || ch == '?' || ch == 27) {  // ESC
+                if (ch == 'q' || ch == '?' || ch == 27) {
                     tui->mode = UI_MODE_MENU;
                     tui_refresh(tui);
                 }

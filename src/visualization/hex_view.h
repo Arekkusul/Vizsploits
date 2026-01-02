@@ -18,6 +18,7 @@
 typedef enum {
     BYTE_NORMAL,
     BYTE_MODIFIED,      // Recently written
+    BYTE_JUST_CHANGED,  // Just changed this step (flash highlight)
     BYTE_CORRUPTED,     // Overflow/corruption
     BYTE_FREED,         // Part of freed memory
     BYTE_POINTER,       // Known pointer value
@@ -35,6 +36,7 @@ typedef struct {
     size_t capacity;                    // Max size
     const char *label;                  // Region label
     bool is_valid;                      // Is region active
+    bool is_freed;                      // Was this region freed
     int highlight_start;                // Highlight range start (-1 = none)
     int highlight_end;                  // Highlight range end
 } hex_region_t;
@@ -125,12 +127,25 @@ void hex_view_set_highlight(hex_view_t *view, int region_idx,
                             int start, int end);
 
 /**
- * Utility: Render a hex dump line
+ * Decay "just changed" states to "modified" (call after each step)
+ */
+void hex_view_decay_highlights(hex_view_t *view);
+
+/**
+ * Utility: Render a hex dump line (compact format)
  * Returns number of characters written
  */
 int hex_render_line(WINDOW *win, int y, int x,
                     void *display_addr, const uint8_t *data,
                     const byte_state_t *states, size_t len,
                     bool show_ascii, int bytes_per_row);
+
+/**
+ * Utility: Render a hex dump line with short address
+ */
+int hex_render_line_short(WINDOW *win, int y, int x,
+                          uint32_t addr_low, const uint8_t *data,
+                          const byte_state_t *states, size_t len,
+                          bool show_ascii, int bytes_per_row);
 
 #endif // HEX_VIEW_H
