@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <getopt.h>
 
 /**
@@ -51,6 +52,30 @@ static void list_exploits_cli(void) {
     }
 }
 
+// Helper to print hex preview with ASCII
+static void print_hex_preview(const uint8_t *data, size_t len) {
+    const char *color_dim = "\033[2m";
+    const char *color_reset = "\033[0m";
+
+    printf("\n%s         hex: ", color_dim);
+    for (size_t i = 0; i < len && i < 16; i++) {
+        printf("%02x ", data[i]);
+    }
+    if (len > 16) printf("...");
+
+    printf("\n         ascii: \"");
+    for (size_t i = 0; i < len && i < 16; i++) {
+        char c = (char)data[i];
+        if (c >= 32 && c < 127) {
+            putchar(c);
+        } else {
+            putchar('.');
+        }
+    }
+    if (len > 16) printf("...");
+    printf("\"%s", color_reset);
+}
+
 // Event handler for headless mode
 static void headless_event_handler(const primitive_event_t *evt, void *userdata) {
     (void)userdata;
@@ -61,6 +86,7 @@ static void headless_event_handler(const primitive_event_t *evt, void *userdata)
     const char *color_yellow = "\033[33m";
     const char *color_red = "\033[31m";
     const char *color_cyan = "\033[36m";
+    const char *color_magenta = "\033[35m";
 
     const char *color = color_reset;
 
@@ -80,6 +106,9 @@ static void headless_event_handler(const primitive_event_t *evt, void *userdata)
         case PRIM_CHECKPOINT:
             color = color_cyan;
             break;
+        case PRIM_WRITE:
+            color = color_magenta;
+            break;
         default:
             break;
     }
@@ -96,6 +125,11 @@ static void headless_event_handler(const primitive_event_t *evt, void *userdata)
 
     if (evt->description) {
         printf(" | %s", evt->description);
+    }
+
+    // Show hex preview for WRITE events
+    if (evt->type == PRIM_WRITE && evt->data.memop.len > 0) {
+        print_hex_preview(evt->data.memop.preview, evt->data.memop.len);
     }
 
     printf("\n");

@@ -111,6 +111,7 @@ tui_t *tui_init(void) {
 
     tui->mode = UI_MODE_MENU;
     tui->step_mode = true;
+    tui->focused_panel = PANEL_HEAP;
 
     // Setup signal handler for resize
     g_tui = tui;
@@ -142,6 +143,26 @@ void tui_handle_resize(tui_t *tui) {
     tui_refresh(tui);
 }
 
+void tui_focus_next(tui_t *tui) {
+    if (!tui) return;
+    tui->focused_panel = (tui->focused_panel + 1) % PANEL_COUNT;
+}
+
+void tui_focus_prev(tui_t *tui) {
+    if (!tui) return;
+    tui->focused_panel = (tui->focused_panel + PANEL_COUNT - 1) % PANEL_COUNT;
+}
+
+static const char *panel_name(panel_focus_t panel) {
+    switch (panel) {
+        case PANEL_HEAP:     return "HEAP";
+        case PANEL_STACK:    return "STACK";
+        case PANEL_INFO:     return "INFO";
+        case PANEL_TIMELINE: return "TIMELINE";
+        default:             return "???";
+    }
+}
+
 static void render_status_bar(tui_t *tui) {
     werase(tui->status_win);
     wattron(tui->status_win, A_REVERSE);
@@ -157,14 +178,26 @@ static void render_status_bar(tui_t *tui) {
     mvwprintw(tui->status_win, 0, 0, " Kernel Exploit Visualizer ");
     wprintw(tui->status_win, "| Mode: %s ", mode_str);
 
+    if (tui->mode == UI_MODE_RUNNING || tui->mode == UI_MODE_FINISHED) {
+        wprintw(tui->status_win, "| Focus: %s ", panel_name(tui->focused_panel));
+    }
+
     if (tui->current_exploit) {
         wprintw(tui->status_win, "| Exploit: %s ", tui->current_exploit->meta.name);
     }
 
-    // Fill rest of line
+    // Controls hint
     int y, x;
     getyx(tui->status_win, y, x);
     (void)y;
+
+    int hint_start = tui->term_width - 35;
+    if (x < hint_start) {
+        mvwprintw(tui->status_win, 0, hint_start, " [</>] panel [j/k] scroll [q] quit ");
+    }
+
+    // Fill rest of line
+    getyx(tui->status_win, y, x);
     for (int i = x; i < tui->term_width; i++) {
         waddch(tui->status_win, ' ');
     }
@@ -180,7 +213,7 @@ static void render_menu(tui_t *tui) {
 
     int height, width;
     getmaxyx(win, height, width);
-    (void)width;  // Suppress unused warning
+    (void)width;
 
     // Title
     wattron(win, A_BOLD);
@@ -260,7 +293,14 @@ static void render_info(tui_t *tui) {
     getmaxyx(win, height, width);
     (void)width;
 
+    bool focused = (tui->focused_panel == PANEL_INFO);
+    if (focused) {
+        wattron(win, A_REVERSE);
+    }
     mvwprintw(win, 0, 2, " Event Details ");
+    if (focused) {
+        wattroff(win, A_REVERSE);
+    }
 
     const timeline_entry_t *entry = timeline_current(tui->timeline);
     if (!entry) {
@@ -347,6 +387,17 @@ static void render_info(tui_t *tui) {
             mvwprintw(win, y++, 2, "Dest: 0x%lx",
                       (unsigned long)evt->data.memop.dst);
             mvwprintw(win, y++, 2, "Length: %zu", evt->data.memop.len);
+            // Show preview bytes
+            if (evt->data.memop.len > 0) {
+                mvwprintw(win, y++, 2, "Data preview:");
+                wattron(win, COLOR_PAIR(COLOR_YELLOW_PAIR));
+                wmove(win, y, 4);
+                for (size_t i = 0; i < 16 && i < evt->data.memop.len; i++) {
+                    wprintw(win, "%02x ", evt->data.memop.preview[i]);
+                }
+                wattroff(win, COLOR_PAIR(COLOR_YELLOW_PAIR));
+                y++;
+            }
             break;
 
         default:
@@ -354,7 +405,7 @@ static void render_info(tui_t *tui) {
     }
 
     // Controls at bottom
-    mvwprintw(win, height - 2, 2, "[Space] Step [R] Run [Q] Quit");
+    mvwprintw(win, height - 2, 2, "[Space] Step [R] Run [Q] Back");
 
     wrefresh(win);
 }
@@ -367,8 +418,10 @@ void tui_refresh(tui_t *tui) {
 
         case UI_MODE_RUNNING:
         case UI_MODE_FINISHED:
-            heap_view_render(tui->heap_view, tui->heap_win);
-            stack_view_render(tui->stack_view, tui->stack_win);
+            heap_view_render(tui->heap_view, tui->heap_win,
+                           tui->focused_panel == PANEL_HEAP);
+            stack_view_render(tui->stack_view, tui->stack_win,
+                            tui->focused_panel == PANEL_STACK);
             timeline_render(tui->timeline, tui->timeline_win);
             render_info(tui);
             break;
@@ -518,16 +571,53 @@ int tui_run(tui_t *tui) {
                         // Reset to beginning
                         timeline_goto_step(tui->timeline, 0);
                         heap_view_clear(tui->heap_view);
+                        stack_view_clear(tui->stack_view);
                         tui_refresh(tui);
                         break;
 
+                    // Panel navigation
+                    case KEY_LEFT:
+                    case 'h':
+                    case '<':
+                        tui_focus_prev(tui);
+                        tui_refresh(tui);
+                        break;
+
+                    case KEY_RIGHT:
+                    case 'l':
+                    case '>':
+                        tui_focus_next(tui);
+                        tui_refresh(tui);
+                        break;
+
+                    // Scroll focused panel
                     case KEY_UP:
-                        heap_view_scroll(tui->heap_view, -1);
+                    case 'k':
+                        switch (tui->focused_panel) {
+                            case PANEL_HEAP:
+                                heap_view_scroll(tui->heap_view, -1);
+                                break;
+                            case PANEL_STACK:
+                                stack_view_scroll(tui->stack_view, -1);
+                                break;
+                            default:
+                                break;
+                        }
                         tui_refresh(tui);
                         break;
 
                     case KEY_DOWN:
-                        heap_view_scroll(tui->heap_view, 1);
+                    case 'j':
+                        switch (tui->focused_panel) {
+                            case PANEL_HEAP:
+                                heap_view_scroll(tui->heap_view, 1);
+                                break;
+                            case PANEL_STACK:
+                                stack_view_scroll(tui->stack_view, 1);
+                                break;
+                            default:
+                                break;
+                        }
                         tui_refresh(tui);
                         break;
                 }
