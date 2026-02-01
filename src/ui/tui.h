@@ -4,7 +4,10 @@
 #include "../visualization/heap_view.h"
 #include "../visualization/stack_view.h"
 #include "../visualization/timeline.h"
+#include "../visualization/timeline_filter.h"
+#include "../visualization/mem_diff.h"
 #include "../exploits/api/exploit_api.h"
+#include "../instrumentation/ptrace/ptrace_backend.h"
 #include <ncurses.h>
 
 /**
@@ -28,6 +31,9 @@ typedef enum {
     PANEL_COUNT
 } panel_focus_t;
 
+/* Maximum breakpoint types */
+#define MAX_BREAKPOINT_TYPES 24
+
 /**
  * TUI State
  */
@@ -45,6 +51,20 @@ typedef struct {
     stack_view_t *stack_view;
     timeline_t *timeline;
 
+    // Timeline filter/search
+    timeline_filter_t *timeline_filter;
+    bool search_active;
+    char search_buf[128];
+    int search_cursor;
+
+    // Breakpoints on event types
+    primitive_type_t breakpoint_types[MAX_BREAKPOINT_TYPES];
+    int num_breakpoints;
+
+    // Memory diff
+    mem_diff_t *mem_diff;
+    bool diff_mode;
+
     // State
     ui_mode_t mode;
     int selected_exploit;
@@ -55,6 +75,18 @@ typedef struct {
 
     // Panel focus
     panel_focus_t focused_panel;
+
+    // Status message (temporary)
+    char status_msg[128];
+    int status_msg_ttl;  // frames to display
+
+    // Education/lesson mode (Feature 4)
+    void *current_lesson;  // lesson_t* (forward declared)
+    bool lesson_mode;
+
+    // Ptrace mode (Feature 2)
+    ptrace_session_t *ptrace_session;
+    bool ptrace_mode;
 
     // Dimensions
     int term_height;
